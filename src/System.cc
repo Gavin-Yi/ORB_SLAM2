@@ -40,6 +40,7 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
     "This is free software, and you are welcome to redistribute it" << endl <<
     "under certain conditions. See LICENSE.txt." << endl << endl;
 
+    // 输出传感器类型 
     cout << "Input sensor was set to: ";
 
     if(mSensor==MONOCULAR)

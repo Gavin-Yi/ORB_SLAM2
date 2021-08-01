@@ -26,6 +26,7 @@
 #include<thread>
 #include<opencv2/core/core.hpp>
 
+#include "unistd.h"
 #include "Tracking.h"
 #include "FrameDrawer.h"
 #include "MapDrawer.h"
@@ -59,7 +60,10 @@ public:
 public:
 
     // Initialize the SLAM system. It launches the Local Mapping, Loop Closing and Viewer threads.
-    System(const string &strVocFile, const string &strSettingsFile, const eSensor sensor, const bool bUseViewer = true);
+    System( const string &strVocFile,       // 字典文件 
+            const string &strSettingsFile,  // 设置参数文件
+            const eSensor sensor,           // 使用的相机类型
+            const bool bUseViewer = true);  // ?查看可视化地图
 
     // Proccess the given stereo frame. Images must be synchronized and rectified.
     // Input images: RGB (CV_8UC3) or grayscale (CV_8U). RGB is converted to grayscale.

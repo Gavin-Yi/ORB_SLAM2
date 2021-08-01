@@ -125,7 +125,9 @@ int main(int argc, char **argv)
     return 0;
 }
 
-void LoadImages(const string &strFile, vector<string> &vstrImageFilenames, vector<double> &vTimestamps)
+void LoadImages(const string &strFile,              // 读取的文件 
+                vector<string> &vstrImageFilenames, // 保存的图片名称数组
+                vector<double> &vTimestamps)        // 与图片对应的时间戳
 {
     ifstream f;
     f.open(strFile.c_str());
