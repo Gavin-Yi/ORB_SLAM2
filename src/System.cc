@@ -29,8 +29,11 @@
 namespace ORB_SLAM2
 {
 
-System::System(const string &strVocFile, const string &strSettingsFile, const eSensor sensor,
-               const bool bUseViewer):mSensor(sensor), mpViewer(static_cast<Viewer*>(NULL)), mbReset(false),mbActivateLocalizationMode(false),
+System::System( const string &strVocFile,       // 字典文件 
+                const string &strSettingsFile,  // 设置参数文件
+                const eSensor sensor,           // 使用的相机类型
+                const bool bUseViewer           // ?打开可视化工具
+                ):mSensor(sensor), mpViewer(static_cast<Viewer*>(NULL)), mbReset(false),mbActivateLocalizationMode(false),
         mbDeactivateLocalizationMode(false)
 {
     // Output welcome message
@@ -84,8 +87,14 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
 
     //Initialize the Tracking thread
     //(it will live in the main thread of execution, the one that called this constructor)
-    mpTracker = new Tracking(this, mpVocabulary, mpFrameDrawer, mpMapDrawer,
-                             mpMap, mpKeyFrameDatabase, strSettingsFile, mSensor);
+    mpTracker = new Tracking(this, 
+                             mpVocabulary,          // 导入的词典
+                             mpFrameDrawer, 
+                             mpMapDrawer,
+                             mpMap,                 // 
+                             mpKeyFrameDatabase,    // 词袋的数据库
+                             strSettingsFile,       // 参数设置文件
+                             mSensor);
 
     //Initialize the Local Mapping thread and launch
     mpLocalMapper = new LocalMapping(mpMap, mSensor==MONOCULAR);
@@ -225,8 +234,10 @@ cv::Mat System::TrackMonocular(const cv::Mat &im, const double &timestamp)
     }
 
     // Check mode change
+    // 改变的是局部建图线程的模式
     {
         unique_lock<mutex> lock(mMutexMode);
+        // 激活定位模式
         if(mbActivateLocalizationMode)
         {
             mpLocalMapper->RequestStop();
@@ -236,7 +247,8 @@ cv::Mat System::TrackMonocular(const cv::Mat &im, const double &timestamp)
             {
                 usleep(1000);
             }
-
+            
+            // 不进行局部建图，只定位相机的姿态
             mpTracker->InformOnlyTracking(true);
             mbActivateLocalizationMode = false;
         }
@@ -258,6 +270,7 @@ cv::Mat System::TrackMonocular(const cv::Mat &im, const double &timestamp)
     }
     }
 
+    // 获取相机位姿的估计结果
     cv::Mat Tcw = mpTracker->GrabImageMonocular(im,timestamp);
 
     unique_lock<mutex> lock2(mMutexState);

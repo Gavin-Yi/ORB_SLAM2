@@ -63,7 +63,7 @@ public:
     System( const string &strVocFile,       // 字典文件 
             const string &strSettingsFile,  // 设置参数文件
             const eSensor sensor,           // 使用的相机类型
-            const bool bUseViewer = true);  // ?查看可视化地图
+            const bool bUseViewer = true);  
 
     // Proccess the given stereo frame. Images must be synchronized and rectified.
     // Input images: RGB (CV_8UC3) or grayscale (CV_8U). RGB is converted to grayscale.

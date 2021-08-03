@@ -13,7 +13,7 @@
 	],
 	"todo-tree.highlights.customHighlight": {
 	" Step ": {
-	"foreground": "#7CFC00",
+	"foreground": "#6A5ACD",
 	"icon": "question",
 	"iconColour": "green",
 	"type": "text-and-comment",
@@ -101,6 +101,8 @@
 		"xstddef": "cpp",
 		"xstring": "cpp",
 		"xtr1common": "cpp",
-		"xutility": "cpp"
+		"xutility": "cpp",
+		"*.tcc": "cpp",
+		"*.txx": "cpp"
 	}
 }

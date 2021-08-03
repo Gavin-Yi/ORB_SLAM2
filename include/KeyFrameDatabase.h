@@ -52,6 +52,7 @@ public:
    void clear();
 
    // Loop Detection
+   // 回环检测
    std::vector<KeyFrame *> DetectLoopCandidates(KeyFrame* pKF, float minScore);
 
    // Relocalization
@@ -63,6 +64,7 @@ protected:
   const ORBVocabulary* mpVoc;
 
   // Inverted file
+  // ? 保存关键帧指针的列表的一个数组,初始化时以词典的大小为基准resize
   std::vector<list<KeyFrame*> > mvInvertedFile;
 
   // Mutex

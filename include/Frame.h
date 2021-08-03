@@ -119,9 +119,11 @@ public:
     cv::Mat mDistCoef;
 
     // Stereo baseline multiplied by fx.
+    // 针对双目相机，基线 X (相机的内参系数fx)
     float mbf;
 
     // Stereo baseline in meters.
+    // 双目相机的基线距离，单位是m
     float mb;
 
     // Threshold close/far points. Close points are inserted from 1 view.
@@ -161,9 +163,12 @@ public:
     std::vector<std::size_t> mGrid[FRAME_GRID_COLS][FRAME_GRID_ROWS];
 
     // Camera pose.
+    // 相机的位姿，Tcw代表着从 世界坐标系到相机坐标系的变换矩阵
+    // ? 应该是Twc更容易计算 相机坐标系原点 在世界坐标系下的坐标，需要联系实际使用的地方查看
     cv::Mat mTcw;
 
     // Current and Next Frame id.
+    // 类的静态成员变量，这些变量在整个系统开始执行的时候就初始化
     static long unsigned int nNextId;
     long unsigned int mnId;
 

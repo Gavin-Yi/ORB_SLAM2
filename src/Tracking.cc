@@ -43,7 +43,15 @@ using namespace std;
 namespace ORB_SLAM2
 {
 
-Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer, MapDrawer *pMapDrawer, Map *pMap, KeyFrameDatabase* pKFDB, const string &strSettingPath, const int sensor):
+Tracking::Tracking(
+    System *pSys,                   // 指向生成Tracking线程的父亲，一个System对象
+    ORBVocabulary* pVoc,            // 导入的词典
+    FrameDrawer *pFrameDrawer,      // ?初始化暂未用到
+    MapDrawer *pMapDrawer,          // ?初始化暂未用到
+    Map *pMap,                      // ?初始化暂未用到
+    KeyFrameDatabase* pKFDB,        // 存储词袋的数据库
+    const string &strSettingPath,   // 参数设置文件
+    const int sensor):              // 摄像机类型
     mState(NO_IMAGES_YET), mSensor(sensor), mbOnlyTracking(false), mbVO(false), mpORBVocabulary(pVoc),
     mpKeyFrameDB(pKFDB), mpInitializer(static_cast<Initializer*>(NULL)), mpSystem(pSys), mpViewer(NULL),
     mpFrameDrawer(pFrameDrawer), mpMapDrawer(pMapDrawer), mpMap(pMap), mnLastRelocFrameId(0)
@@ -55,6 +63,12 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
     float fy = fSettings["Camera.fy"];
     float cx = fSettings["Camera.cx"];
     float cy = fSettings["Camera.cy"];
+
+    //  |*****************|
+    //  |   fx      cx    |
+    //  |       fy  cy    |
+    //  |                 |
+    //  |*****************|
 
     cv::Mat K = cv::Mat::eye(3,3,CV_32F);
     K.at<float>(0,0) = fx;
@@ -74,8 +88,10 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
         DistCoef.resize(5);
         DistCoef.at<float>(4) = k3;
     }
+    // 畸变系数
     DistCoef.copyTo(mDistCoef);
 
+    // ?没有找到这个参数
     mbf = fSettings["Camera.bf"];
 
     float fps = fSettings["Camera.fps"];
@@ -100,6 +116,7 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
     cout << "- fps: " << fps << endl;
 
 
+    // 图片的通道顺序可能是 RGB 或者 BGR
     int nRGB = fSettings["Camera.RGB"];
     mbRGB = nRGB;
 
@@ -134,6 +151,7 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
 
     if(sensor==System::STEREO || sensor==System::RGBD)
     {
+        // 对于 双目相机 和 RGBD 相机，用来区分近远点的参数
         mThDepth = mbf*(float)fSettings["ThDepth"]/fx;
         cout << endl << "Depth Threshold (Close/Far Points): " << mThDepth << endl;
     }
@@ -236,10 +254,13 @@ cv::Mat Tracking::GrabImageRGBD(const cv::Mat &imRGB,const cv::Mat &imD, const d
 }
 
 
-cv::Mat Tracking::GrabImageMonocular(const cv::Mat &im, const double &timestamp)
+cv::Mat Tracking::GrabImageMonocular(
+    const cv::Mat &im,          // 单目图像
+    const double &timestamp)    // 时间戳
 {
     mImGray = im;
 
+    // Step 1 将图像转化为灰度图
     if(mImGray.channels()==3)
     {
         if(mbRGB)
@@ -255,8 +276,17 @@ cv::Mat Tracking::GrabImageMonocular(const cv::Mat &im, const double &timestamp)
             cvtColor(mImGray,mImGray,CV_BGRA2GRAY);
     }
 
-    if(mState==NOT_INITIALIZED || mState==NO_IMAGES_YET)
-        mCurrentFrame = Frame(mImGray,timestamp,mpIniORBextractor,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth);
+    // Step 2 构造Frame
+    if(mState==NOT_INITIALIZED || mState==NO_IMAGES_YET)    // 没有初始化的前一个状态就是NO_IMAGES_YET
+        mCurrentFrame = Frame(
+            mImGray,
+            timestamp,
+            mpIniORBextractor,      // 这里使用的是初始化使用的ORB特征点提取器，数量是正常使用的两倍
+            mpORBVocabulary,
+            mK,
+            mDistCoef,
+            mbf,
+            mThDepth);
     else
         mCurrentFrame = Frame(mImGray,timestamp,mpORBextractorLeft,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth);
 
@@ -1505,6 +1535,7 @@ bool Tracking::Relocalization()
 void Tracking::Reset()
 {
 
+    // 绘图线程停止
     cout << "System Reseting" << endl;
     if(mpViewer)
     {
@@ -1515,20 +1546,24 @@ void Tracking::Reset()
 
     // Reset Local Mapping
     cout << "Reseting Local Mapper...";
+    // 局部建图
     mpLocalMapper->RequestReset();
     cout << " done" << endl;
 
     // Reset Loop Closing
     cout << "Reseting Loop Closing...";
+    // 回环检测
     mpLoopClosing->RequestReset();
     cout << " done" << endl;
 
     // Clear BoW Database
     cout << "Reseting Database...";
+    // 词袋数据库
     mpKeyFrameDB->clear();
     cout << " done" << endl;
 
     // Clear Map (this erase MapPoints and KeyFrames)
+    // 地图点和关键帧
     mpMap->clear();
 
     KeyFrame::nNextId = 0;
