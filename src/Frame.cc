@@ -187,8 +187,10 @@ Frame::Frame(
 {
     // Frame ID
     // ! Frame ID 是一个静态成员变量，作用域为全局
+    // Step 1 帧的ID自增
     mnId=nNextId++;
 
+    // Step 2 计算图像金字塔的参数
     // Scale Level Info
     mnScaleLevels = mpORBextractorLeft->GetLevels();
     mfScaleFactor = mpORBextractorLeft->GetScaleFactor();
@@ -198,35 +200,48 @@ Frame::Frame(
     mvLevelSigma2 = mpORBextractorLeft->GetScaleSigmaSquares();
     mvInvLevelSigma2 = mpORBextractorLeft->GetInverseScaleSigmaSquares();
 
+    // Step 3 提取特征点
     // ORB extraction
     ExtractORB(0,imGray);   // 0-左眼，1-右眼
 
+    // 求出特征点的个数
     N = mvKeys.size();
-
+    // 如果没有成功提取特征点，则直接返回
     if(mvKeys.empty())
         return;
 
+    // Step 4 用OpenCV的矫正函数，内参进行去畸变
     UndistortKeyPoints();
 
     // Set no stereo information
+    // 单目相机没有右图像和深度信息
     mvuRight = vector<float>(N,-1);
     mvDepth = vector<float>(N,-1);
 
+    // 初始化本帧的地图点
     mvpMapPoints = vector<MapPoint*>(N,static_cast<MapPoint*>(NULL));
+    // 记录地图点是否为外点，初始化均为外点false
     mvbOutlier = vector<bool>(N,false);
 
     // This is done only for the first Frame (or after a change in the calibration)
+    // Step 5 计算去畸变后图像的边界，将特征点分配到网格当中，这个过程一般只在第一帧或者相机标定参数发生变化之后进行
     if(mbInitialComputations)
     {
+        // 计算去畸变图像的边界
         ComputeImageBounds(imGray);
 
+        // 网格默认是64*48
+        // 表示一个图像像素相当于多少个图像网格列
         mfGridElementWidthInv=static_cast<float>(FRAME_GRID_COLS)/static_cast<float>(mnMaxX-mnMinX);
+        // 表示一个图像像素相当于多少个图像网格行
         mfGridElementHeightInv=static_cast<float>(FRAME_GRID_ROWS)/static_cast<float>(mnMaxY-mnMinY);
 
+        // 给类的静态成员赋值
         fx = K.at<float>(0,0);
         fy = K.at<float>(1,1);
         cx = K.at<float>(0,2);
         cy = K.at<float>(1,2);
+        // ? 可能是因为要频繁使用且耗时，所以保存结果
         invfx = 1.0f/fx;
         invfy = 1.0f/fy;
 
@@ -238,25 +253,37 @@ Frame::Frame(
     AssignFeaturesToGrid();
 }
 
+/**
+ * @brief 将提取到的ORB特征点分配到网格当中
+ **/
 void Frame::AssignFeaturesToGrid()
 {
+    // Step 1 给存储特征点的网格数组 Frame::mGrid 预分配空间
     int nReserve = 0.5f*N/(FRAME_GRID_COLS*FRAME_GRID_ROWS);
+    // 对mGrid数组中的每一个vector元素预分配空间
     for(unsigned int i=0; i<FRAME_GRID_COLS;i++)
         for (unsigned int j=0; j<FRAME_GRID_ROWS;j++)
             mGrid[i][j].reserve(nReserve);
 
+    // Step 2 遍历每个去畸变之后的特征点,将索引保存到网格数组中
     for(int i=0;i<N;i++)
     {
+        // 从类的成员变量中，获取每个去畸变之后的特征点
         const cv::KeyPoint &kp = mvKeysUn[i];
 
+        // 计算去畸变之后特征点的网格坐标，如果在网格内，则把索引存入网格数组
         int nGridPosX, nGridPosY;
         if(PosInGrid(kp,nGridPosX,nGridPosY))
             mGrid[nGridPosX][nGridPosY].push_back(i);
     }
 }
 
-// @param flag 0-左眼 1-右眼
-// @param im 输入的灰度图像
+/**
+ * @brief 提取ORB特征点，通过仿函数，进入ORBextractor文件
+ * 
+ * @param[in] flag 0-左眼 1-右眼
+ * @param[in] im 输入的灰度图像
+ **/
 void Frame::ExtractORB(int flag, const cv::Mat &im)
 {
     if(flag==0)
@@ -392,12 +419,24 @@ vector<size_t> Frame::GetFeaturesInArea(const float &x, const float  &y, const f
     return vIndices;
 }
 
+/**
+ * @brief
+ * 
+ * @param[in] kp            给定的特征点
+ * @param[in&out] posX      特征点所在网格坐标的横坐标
+ * @param[in&out] posY      特征点所在网格坐标的纵坐标
+ * @return true             如果找到特征点所在的网格坐标，返回true
+ * @return false            没有找到，返回false
+ **/
 bool Frame::PosInGrid(const cv::KeyPoint &kp, int &posX, int &posY)
 {
+    // 计算特征点落在了哪个网格
     posX = round((kp.pt.x-mnMinX)*mfGridElementWidthInv);
     posY = round((kp.pt.y-mnMinY)*mfGridElementHeightInv);
 
     //Keypoint's coordinates are undistorted, which could cause to go out of the image
+    // 因为特征点进行了去畸变，而且前面进行了round操作，所以算出的网格坐标，可能会超出实际划分的网格
+    // 如果计算的网格坐标超出了可能的坐标，返回false
     if(posX<0 || posX>=FRAME_GRID_COLS || posY<0 || posY>=FRAME_GRID_ROWS)
         return false;
 
@@ -414,8 +453,12 @@ void Frame::ComputeBoW()
     }
 }
 
+/**
+ * @brief 用内参对特征点进行去畸变
+ **/
 void Frame::UndistortKeyPoints()
 {
+    // 如果畸变参数k1为0，则后面的参数基本都为0，直接返回
     if(mDistCoef.at<float>(0)==0.0)
     {
         mvKeysUn=mvKeys;
@@ -423,52 +466,79 @@ void Frame::UndistortKeyPoints()
     }
 
     // Fill matrix with points
+    // N为提取的特征点数量，为了满足OpenCV的函数输入要求，创建一个N*2维的矩阵
     cv::Mat mat(N,2,CV_32F);
     for(int i=0; i<N; i++)
     {
+        // 遍历每个特征点，然后将他们的横纵坐标分别保存
         mat.at<float>(i,0)=mvKeys[i].pt.x;
         mat.at<float>(i,1)=mvKeys[i].pt.y;
     }
 
     // Undistort points
+    // reshape函数将mat变为2通道的矩阵，行数保持不变
+    // OpenCV的去畸变函数需要mat具有2通道
     mat=mat.reshape(2);
-    cv::undistortPoints(mat,mat,mK,mDistCoef,cv::Mat(),mK);
+    cv::undistortPoints(
+        mat,            // 输入的特征点坐标
+        mat,            // 输出的校正后的特征点坐标覆盖原矩阵
+        mK,             // 内参矩阵
+        mDistCoef,      // 畸变参数
+        cv::Mat(),      // 一个空矩阵，原作用是矫正
+        mK);            // 新内参矩阵
+
+    // 将矩阵恢复为单通道
     mat=mat.reshape(1);
 
     // Fill undistorted keypoint vector
     mvKeysUn.resize(N);
     for(int i=0; i<N; i++)
     {
+        // 遍历每个特征点，更改他们的坐标值
         cv::KeyPoint kp = mvKeys[i];
         kp.pt.x=mat.at<float>(i,0);
         kp.pt.y=mat.at<float>(i,1);
+        // 将结果存入mvKeysUn向量
         mvKeysUn[i]=kp;
     }
 }
 
+/**
+ * @brief 计算去畸变图像的边界
+ * 
+ * @param[in] imLeft    需要计算边界的图像
+ **/
 void Frame::ComputeImageBounds(const cv::Mat &imLeft)
 {
+    // 如果畸变参数不为0
     if(mDistCoef.at<float>(0)!=0.0)
     {
+        // 保存校正前的图像四个边界点坐标
         cv::Mat mat(4,2,CV_32F);
-        mat.at<float>(0,0)=0.0; mat.at<float>(0,1)=0.0;
-        mat.at<float>(1,0)=imLeft.cols; mat.at<float>(1,1)=0.0;
-        mat.at<float>(2,0)=0.0; mat.at<float>(2,1)=imLeft.rows;
-        mat.at<float>(3,0)=imLeft.cols; mat.at<float>(3,1)=imLeft.rows;
+        mat.at<float>(0,0)=0.0; mat.at<float>(0,1)=0.0;                     // 左上
+        mat.at<float>(1,0)=imLeft.cols; mat.at<float>(1,1)=0.0;             // 右上
+        mat.at<float>(2,0)=0.0; mat.at<float>(2,1)=imLeft.rows;             // 左下
+        mat.at<float>(3,0)=imLeft.cols; mat.at<float>(3,1)=imLeft.rows;     // 右下
 
         // Undistort corners
+        // 和前面校正特征点的操作一样，把四个顶点作为内容去畸变
         mat=mat.reshape(2);
         cv::undistortPoints(mat,mat,mK,mDistCoef,cv::Mat(),mK);
         mat=mat.reshape(1);
 
+        // 取左上和左下的点的横坐标的较小值为MinX
         mnMinX = min(mat.at<float>(0,0),mat.at<float>(2,0));
+        // 取右上和右下的点的横坐标的较大值为MaxX
         mnMaxX = max(mat.at<float>(1,0),mat.at<float>(3,0));
+        // 取左上和右上的点的纵坐标的较小值为MinY
         mnMinY = min(mat.at<float>(0,1),mat.at<float>(1,1));
+        // 取左下和右下的点的纵坐标的较大值为MaxY
         mnMaxY = max(mat.at<float>(2,1),mat.at<float>(3,1));
 
     }
     else
     {
+        // 如果畸变参数为0，默认以当前图像大小为边界
         mnMinX = 0.0f;
         mnMaxX = imLeft.cols;
         mnMinY = 0.0f;

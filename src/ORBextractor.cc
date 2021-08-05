@@ -73,6 +73,7 @@ const int HALF_PATCH_SIZE = 15; // 圆的半径，除去了原点
 const int EDGE_THRESHOLD = 19;  // 创建图像金字塔时，图像预留的边界大小
 
 
+// 计算特征点的方向，返回值单位是°，精度是0.3°
 static float IC_Angle(const Mat& image, 
                         Point2f pt,         // 中心点的坐标  
                         const vector<int> & u_max)
@@ -80,22 +81,28 @@ static float IC_Angle(const Mat& image,
     int m_01 = 0,   // y坐标的矩 
         m_10 = 0;   // x坐标的矩
 
-    // 拿到中心点的像素值
+    // center[0]对应中心点的像素值，center[u+v*step]代表向下v行,向右u列的点的像素值
     const uchar* center = &image.at<uchar> (cvRound(pt.y), cvRound(pt.x));
 
     // Treat the center line differently, v=0
+    // 先计算水平经过圆心的线
     for (int u = -HALF_PATCH_SIZE; u <= HALF_PATCH_SIZE; ++u)
         m_10 += u * center[u];
 
-    // Go line by line in the circuI853lar patch
+    // Go line by line in the circular patch
+    // step1是图像一行包含的字节总数
     int step = (int)image.step1();
     for (int v = 1; v <= HALF_PATCH_SIZE; ++v)
     {
         // Proceed over the two lines
+        // 对称地画上下两条线，计算m10和m01
         int v_sum = 0;
         int d = u_max[v];
         for (int u = -d; u <= d; ++u)
         {
+            // val_plus是中心线下方的点的像素值
+            // val_minus是中心线上方的点的像素值
+            // 两个点关于中心线上下对称，所以v_sum可以一起计算，只需要遍历上半圆即可
             int val_plus = center[u + v*step], val_minus = center[u - v*step];
             v_sum += (val_plus - val_minus);
             m_10 += u * (val_plus + val_minus);
@@ -106,26 +113,49 @@ static float IC_Angle(const Mat& image,
     return fastAtan2((float)m_01, (float)m_10);
 }
 
-
+// 用于把角度转化为弧度的乘数因子
 const float factorPI = (float)(CV_PI/180.f);
+
+/**
+ * @brief 计算ORB特征点的描述子，是一个静态函数，只能在本文件中调用
+ * 
+ * @param[in] kpt       特征点对象
+ * @param[in] img       特征点所在的图像
+ * @param[in] pattern   预定义好的随即采样点集
+ * @param[out] desc     保存描述子，长度为32*8bit
+ **/
 static void computeOrbDescriptor(const KeyPoint& kpt,
                                  const Mat& img, const Point* pattern,
                                  uchar* desc)
 {
+    // Step 1 把pattern图像按照关键点的方向进行旋转
+    // 把角度转化为弧度
     float angle = (float)kpt.angle*factorPI;
+    // 计算旋转角度的余弦值和正弦值
     float a = (float)cos(angle), b = (float)sin(angle);
 
+    // 获取图像中心的指针
     const uchar* center = &img.at<uchar>(cvRound(kpt.pt.y), cvRound(kpt.pt.x));
     const int step = (int)img.step;
 
+    // 这里是将pattern里每个点的向量进行旋转，旋转向量表示如下
+    // |--        --|
+    // |    a   -b  |
+    // |    b    a  |
+    // |--        --|
+    // x'=xa-yb,  y'=xb+ya
+    // 定义一个函数用于获取旋转后pattern点对在当前坐标系下的坐标
     #define GET_VALUE(idx) \
         center[cvRound(pattern[idx].x*b + pattern[idx].y*a)*step + \
                cvRound(pattern[idx].x*a - pattern[idx].y*b)]
 
-
+    // brief描述子由32*8位组成
+    // 其中每一位来自两个像素点的值的比较，所以每比较出8bit的结果，需要16个随机点，这就是pattern+=16的原因
     for (int i = 0; i < 32; ++i, pattern += 16)
     {
-        int t0, t1, val;
+        int t0,     // 参与比较的一个特征点的灰度值 
+            t1,     // 参与比较的另一个特征点的灰度值
+            val;    // 描述子这个字节的比较结果
         t0 = GET_VALUE(0); t1 = GET_VALUE(1);
         val = t0 < t1;
         t0 = GET_VALUE(2); t1 = GET_VALUE(3);
@@ -143,9 +173,11 @@ static void computeOrbDescriptor(const KeyPoint& kpt,
         t0 = GET_VALUE(14); t1 = GET_VALUE(15);
         val |= (t0 < t1) << 7;
 
+        // 将8位的计算结果存进desc
         desc[i] = (uchar)val;
     }
 
+    // 为了避免和其他程序冲突，在函数用完之后，就取消宏定义
     #undef GET_VALUE
 }
 
@@ -487,9 +519,9 @@ ORBextractor::ORBextractor( int _nfeatures,     // 需要提取的特征点数�
 
 }
 
-static void computeOrientation(const Mat& image, 
-                                vector<KeyPoint>& keypoints, 
-                                const vector<int>& umax)
+static void computeOrientation(const Mat& image,                // 输入的图像
+                                vector<KeyPoint>& keypoints,    // 存储的每一层的关键点
+                                const vector<int>& umax)        // 每一横线与圆交点对应的横坐标的值(最大值)
 {
     for (vector<KeyPoint>::iterator keypoint = keypoints.begin(),
          keypointEnd = keypoints.end(); keypoint != keypointEnd; ++keypoint)
@@ -498,6 +530,8 @@ static void computeOrientation(const Mat& image,
     }
 }
 
+// 将一个根节点分为四个子节点，把根节点内关键点按几何位置分给四个子节点
+// 根节点的关键点内容并没有被清除
 void ExtractorNode::DivideNode(ExtractorNode &n1, ExtractorNode &n2, ExtractorNode &n3, ExtractorNode &n4)
 {
     const int halfX = ceil(static_cast<float>(UR.x-UL.x)/2);
@@ -545,6 +579,7 @@ void ExtractorNode::DivideNode(ExtractorNode &n1, ExtractorNode &n2, ExtractorNo
             n4.vKeys.push_back(kp);
     }
 
+    // 对只有一个关键点的子节点，设置为不再划分
     if(n1.vKeys.size()==1)
         n1.bNoMore = true;
     if(n2.vKeys.size()==1)
@@ -556,7 +591,7 @@ void ExtractorNode::DivideNode(ExtractorNode &n1, ExtractorNode &n2, ExtractorNo
 
 }
 
-// 使用八叉树法对特征点进行平均分配
+// 使用四叉树法对特征点进行平均分配，写的是OctTree，实际上是四叉树
 vector<cv::KeyPoint> ORBextractor::DistributeOctTree(   // 返回值是一个保存右特征点的vecotr容器
     const vector<cv::KeyPoint>& vToDistributeKeys,      // 等待进行分配的特征点
     const int &minX,
@@ -601,19 +636,24 @@ vector<cv::KeyPoint> ORBextractor::DistributeOctTree(   // 返回值是一个保
     for(size_t i=0;i<vToDistributeKeys.size();i++)
     {
         const cv::KeyPoint &kp = vToDistributeKeys[i];
+        // 根据关键点的x坐标所在的位置划分所属提取器
         vpIniNodes[kp.pt.x/hX]->vKeys.push_back(kp);
     }
 
     list<ExtractorNode>::iterator lit = lNodes.begin();
 
+    // 对根节点做一个预处理
     while(lit!=lNodes.end())
     {
         if(lit->vKeys.size()==1)
         {
+            // 只有一个关键点，不再继续划分
             lit->bNoMore=true;
             lit++;
         }
         else if(lit->vKeys.empty())
+            // 该提取器没有关键点，直接清除掉
+            // 该情况下，函数返回了指向下一个元素的指针(当前元素已被清楚)，不需要执行++
             lit = lNodes.erase(lit);
         else
             lit++;
@@ -623,7 +663,9 @@ vector<cv::KeyPoint> ORBextractor::DistributeOctTree(   // 返回值是一个保
 
     int iteration = 0;
 
+    // 节点包含的关键点个数和节点本身的指针，该vector容器只包含可以被分裂的节点，在快分裂结束时才被用到，lNode包含了所有含有关键点的节点
     vector<pair<int,ExtractorNode*> > vSizeAndPointerToNode;
+    // 按根节点的四倍预留，四叉树
     vSizeAndPointerToNode.reserve(lNodes.size()*4);
 
     while(!bFinish)
@@ -638,6 +680,7 @@ vector<cv::KeyPoint> ORBextractor::DistributeOctTree(   // 返回值是一个保
 
         vSizeAndPointerToNode.clear();
 
+        // 对当前所有节点的一次遍历
         while(lit!=lNodes.end())
         {
             if(lit->bNoMore)
@@ -655,11 +698,15 @@ vector<cv::KeyPoint> ORBextractor::DistributeOctTree(   // 返回值是一个保
                 // Add childs if they contain points
                 if(n1.vKeys.size()>0)
                 {
-                    lNodes.push_front(n1);                    
+                    lNodes.push_front(n1);  
+                    // 在根节点分为4个字节点的时候，就已经对大小为1的情况进行了处理，设置NoMore=1                  
                     if(n1.vKeys.size()>1)
                     {
+                        // 可以被分裂的子节点数量+1
                         nToExpand++;
                         vSizeAndPointerToNode.push_back(make_pair(n1.vKeys.size(),&lNodes.front()));
+                        // 用自己的成员变量lit记录自己在这个列表里的位置
+                        // lit是一个iterator，便于分裂时从列表中删除掉自己
                         lNodes.front().lit = lNodes.begin();
                     }
                 }
@@ -694,6 +741,7 @@ vector<cv::KeyPoint> ORBextractor::DistributeOctTree(   // 返回值是一个保
                     }
                 }
 
+                // 此时lit应该指向这四个子节点的根节点，并把它从list中清除
                 lit=lNodes.erase(lit);
                 continue;
             }
@@ -705,9 +753,9 @@ vector<cv::KeyPoint> ORBextractor::DistributeOctTree(   // 返回值是一个保
         {
             bFinish = true;
         }
-        else if(((int)lNodes.size()+nToExpand*3)>N)
+        else if(((int)lNodes.size()+nToExpand*3)>N)     // 加3——删除根节点，加上四个子节点，实际上最多增加3个Node
         {
-
+            // 即将满足关键点的数量要求，采用更优化的方法计算，先进行排序
             while(!bFinish)
             {
 
@@ -716,9 +764,11 @@ vector<cv::KeyPoint> ORBextractor::DistributeOctTree(   // 返回值是一个保
                 vector<pair<int,ExtractorNode*> > vPrevSizeAndPointerToNode = vSizeAndPointerToNode;
                 vSizeAndPointerToNode.clear();
 
+                // 按照int数据的大小，对pair进行升序排序
                 sort(vPrevSizeAndPointerToNode.begin(),vPrevSizeAndPointerToNode.end());
                 for(int j=vPrevSizeAndPointerToNode.size()-1;j>=0;j--)
                 {
+                    // 从后往前检查是否可以分裂，因为后面的元素size值较大，更有可能可以分裂
                     ExtractorNode n1,n2,n3,n4;
                     vPrevSizeAndPointerToNode[j].second->DivideNode(n1,n2,n3,n4);
 
@@ -760,6 +810,7 @@ vector<cv::KeyPoint> ORBextractor::DistributeOctTree(   // 返回值是一个保
                         }
                     }
 
+                    // 每个Node的成员变量lit，是一个iterator，记录了自己在列表里的位置，在这里用到
                     lNodes.erase(vPrevSizeAndPointerToNode[j].second->lit);
 
                     if((int)lNodes.size()>=N)
@@ -774,6 +825,7 @@ vector<cv::KeyPoint> ORBextractor::DistributeOctTree(   // 返回值是一个保
     }
 
     // Retain the best point in each node
+    // 从每个Node中选出最优的关键点
     vector<cv::KeyPoint> vResultKeys;
     vResultKeys.reserve(nfeatures);
     for(list<ExtractorNode>::iterator lit=lNodes.begin(); lit!=lNodes.end(); lit++)
@@ -781,7 +833,8 @@ vector<cv::KeyPoint> ORBextractor::DistributeOctTree(   // 返回值是一个保
         vector<cv::KeyPoint> &vNodeKeys = lit->vKeys;
         cv::KeyPoint* pKP = &vNodeKeys[0];
         float maxResponse = pKP->response;
-
+        // cv::KeyPoint类有一个成员变量response来表示关键点的强度
+        // 遍历，找到其中response最大的关键点，加入到结果当中
         for(size_t k=1;k<vNodeKeys.size();k++)
         {
             if(vNodeKeys[k].response>maxResponse)
@@ -887,7 +940,7 @@ void ORBextractor::ComputeKeyPointsOctTree(vector<vector<KeyPoint> >& allKeypoin
         vector<KeyPoint> & keypoints = allKeypoints[level];
         keypoints.reserve(nfeatures);
 
-        // 使用八叉树法对特征点进行平均分配
+        // 使用四叉树法对特征点进行平均分配
         keypoints = DistributeOctTree(vToDistributeKeys, minBorderX, maxBorderX,
                                       minBorderY, maxBorderY,mnFeaturesPerLevel[level], level);
 
@@ -905,6 +958,7 @@ void ORBextractor::ComputeKeyPointsOctTree(vector<vector<KeyPoint> >& allKeypoin
     }
 
     // compute orientations
+    // 计算关键点方向，给每个KP的angle变量赋值
     for (int level = 0; level < nlevels; ++level)
         computeOrientation(mvImagePyramid[level], allKeypoints[level], umax);
 }
@@ -1088,6 +1142,14 @@ void ORBextractor::ComputeKeyPointsOld(std::vector<std::vector<KeyPoint> > &allK
         computeOrientation(mvImagePyramid[level], allKeypoints[level], umax);
 }
 
+/**
+ * @brief 计算图像某层金字塔上特征点的描述子
+ * 
+ * @param[in] image             某层金字塔图像
+ * @param[in] keypoints         特征点vector容器
+ * @param[out] descriptors      描述子
+ * @param[in] pattern           计算描述子所使用的固定随机点数
+ **/
 static void computeDescriptors(const Mat& image, vector<KeyPoint>& keypoints, Mat& descriptors,
                                const vector<Point>& pattern)
 {
@@ -1098,7 +1160,14 @@ static void computeDescriptors(const Mat& image, vector<KeyPoint>& keypoints, Ma
         computeOrbDescriptor(keypoints[i], image, &pattern[0], descriptors.ptr((int)i));
 }
 
-// 提取ORB特征点和描述子的仿函数，通过重载()实现
+/**
+ * @brief 提取ORB特征点和描述子的仿函数，通过重载()实现
+ * 
+ * @param[in] _image                输入原始图的图像
+ * @param[in] _mask                 掩膜mask
+ * @param[in&out] _keypoints      存储特征点关键点的向量
+ * @param[in&out] _descriptors    存储特征点描述子的向量
+ **/
 void ORBextractor::operator()( 
     InputArray _image, 
     InputArray _mask, 
@@ -1120,50 +1189,85 @@ void ORBextractor::operator()(
     ComputeKeyPointsOctTree(allKeypoints);
     //ComputeKeyPointsOld(allKeypoints);
 
+    //=======拷贝图像描述子到新的矩阵descriptors=======
     Mat descriptors;
 
+    // 统计整个图像金字塔的关键点数量
     int nkeypoints = 0;
     for (int level = 0; level < nlevels; ++level)
         nkeypoints += (int)allKeypoints[level].size();
+
+    // 如果本图像金字塔没有任何的特征点，则强制释放矩阵的数据
     if( nkeypoints == 0 )
         _descriptors.release();
     else
     {
-        _descriptors.create(nkeypoints, 32, CV_8U);
+        // 如果有特征点，那么创建存储描述子的矩阵，存储的数量是整个图像金字塔的
+        _descriptors.create(nkeypoints,     // 行数
+                            32,             // 列数，32*8=256位描述子
+                            CV_8U);         // 类型
+        // ? 不是在原矩阵上修改，而是复制了一个新的矩阵
         descriptors = _descriptors.getMat();
     }
 
+    // 清空了原传入的矩阵
     _keypoints.clear();
+    // 并预分配正确的大小空间
     _keypoints.reserve(nkeypoints);
 
+    // descriptors存储的是整个金字塔的描述子，所有使用一个offset记录每一层关键点的位置便宜
+    // 辅助进行遍历
     int offset = 0;
+    // 遍历图像金字塔的每一层
     for (int level = 0; level < nlevels; ++level)
     {
+        // 获取在allKeypoints中当前层的特征点的容器的句柄
         vector<KeyPoint>& keypoints = allKeypoints[level];
+        // 本层的特征掉数量
         int nkeypointsLevel = (int)keypoints.size();
 
+        // 如果特征点数量为0，则跳出本层循环，进行下一层的检测
         if(nkeypointsLevel==0)
             continue;
 
-        // preprocess the resized image
+        // preprocess the resized image  
+        //=============对图像进行高斯模糊===============
+        // 获取图像金字塔每一层图像的深拷贝
         Mat workingMat = mvImagePyramid[level].clone();
-        GaussianBlur(workingMat, workingMat, Size(7, 7), 2, 2, BORDER_REFLECT_101);
+        // Note:提取特征点的时候，用的是清晰的原图像，计算描述子，为了避免图像噪声的影响，进行了高斯模糊
+        GaussianBlur(workingMat,            // 源图像
+                    workingMat,             // 输出图像
+                    Size(7, 7),             // 高斯滤波器Kernel的大小，必须为正奇数
+                    2,                      // x方向的标准差
+                    2,                      // y方向的标准差
+                    BORDER_REFLECT_101);    // 边缘拓展点的插值类型
 
-        // Compute the descriptors
+        // Compute the descriptors  计算描述子
+        // desc存储当前层的描述子
         Mat desc = descriptors.rowRange(offset, offset + nkeypointsLevel);
-        computeDescriptors(workingMat, keypoints, desc, pattern);
+        // ============计算高斯模糊后的描述子===========
+        computeDescriptors(workingMat,      // 高斯模糊后的图像
+                            keypoints,      // 当前图层特征点集合
+                            desc,           // 存储计算之后的描述子
+                            pattern);       // 随机采样点集
 
+        // 更新偏移量的值，加上当前层所有特征点的数目
         offset += nkeypointsLevel;
 
         // Scale keypoint coordinates
+        // ======对所有非第0层的图像的坐标恢复到第0层=====
         if (level != 0)
         {
+            // 获取当前层的缩放系数，1.2^n
             float scale = mvScaleFactor[level]; //getScale(level, firstLevel, scaleFactor);
             for (vector<KeyPoint>::iterator keypoint = keypoints.begin(),
                  keypointEnd = keypoints.end(); keypoint != keypointEnd; ++keypoint)
+                // 特征点本身直接乘上缩放倍数,重载等价于分别对pt.x和pt.y乘上缩放系数
                 keypoint->pt *= scale;
         }
         // And add the keypoints to the output
+        // 把keypoints中内容插入到_keypoints的末尾
+        // keypoints是对allKeypoints每个点的引用，这里直接转存到_keypoints中
         _keypoints.insert(_keypoints.end(), keypoints.begin(), keypoints.end());
     }
 }
