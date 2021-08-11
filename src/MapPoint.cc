@@ -29,13 +29,31 @@ namespace ORB_SLAM2
 long unsigned int MapPoint::nNextId=0;
 mutex MapPoint::mGlobalMutex;
 
-MapPoint::MapPoint(const cv::Mat &Pos, KeyFrame *pRefKF, Map* pMap):
-    mnFirstKFid(pRefKF->mnId), mnFirstFrame(pRefKF->mnFrameId), nObs(0), mnTrackReferenceForFrame(0),
-    mnLastFrameSeen(0), mnBALocalForKF(0), mnFuseCandidateForKF(0), mnLoopPointForKF(0), mnCorrectedByKF(0),
-    mnCorrectedReference(0), mnBAGlobalForKF(0), mpRefKF(pRefKF), mnVisible(1), mnFound(1), mbBad(false),
-    mpReplaced(static_cast<MapPoint*>(NULL)), mfMinDistance(0), mfMaxDistance(0), mpMap(pMap)
+MapPoint::MapPoint( const cv::Mat &Pos,             // 地图点的世界坐标
+                    KeyFrame *pRefKF,               // 生成地图点的关键帧
+                    Map* pMap):                     // 地图点所在的地图
+    mnFirstKFid(pRefKF->mnId),                      // 第一次观测生成它的关键帧ID
+    mnFirstFrame(pRefKF->mnFrameId),                // 创建该地图点的帧ID
+    nObs(0),                                        // 被观测的次数
+    mnTrackReferenceForFrame(0),                    // 放置被重复添加到局部地图点的标记
+    mnLastFrameSeen(0),                             // 是否决定判断在某个帧视野中的变量
+    mnBALocalForKF(0),                              //
+    mnFuseCandidateForKF(0),                        //
+    mnLoopPointForKF(0),                            //
+    mnCorrectedByKF(0),                             //
+    mnCorrectedReference(0),                        //
+    mnBAGlobalForKF(0),                             //
+    mpRefKF(pRefKF),                                //
+    mnVisible(1),                                   // 在帧中的可视次数
+    mnFound(1),                                     // 被找到的次数，和上面的相比要求能够匹配上
+    mbBad(false),                                   // 坏点标记
+    mpReplaced(static_cast<MapPoint*>(NULL)),       // 替换掉当前地图点的点
+    mfMinDistance(0),                               // 当前地图点在某帧下，可信赖的被找到时其他到关键帧光心距离的下界
+    mfMaxDistance(0),                               // 上界
+    mpMap(pMap)                                     // 从属地图
 {
     Pos.copyTo(mWorldPos);
+    // 平均观测方向初始化为0
     mNormalVector = cv::Mat::zeros(3,1,CV_32F);
 
     // MapPoints can be created from Tracking and Local Mapping. This mutex avoid conflicts with id.
@@ -95,13 +113,26 @@ KeyFrame* MapPoint::GetReferenceKeyFrame()
     return mpRefKF;
 }
 
+/**
+ * @brief 添加观测
+ * 
+ * 记录那些Keyframe的哪些特征点可以观测到该Mappoint
+ * 并增加观测的相机数目nObs，单目+1，双目或者RGBD+2
+ * 这个函数是建立关键帧共视图的核心函数，能共同观测到某些MapPoints的关键帧是共视关键帧
+ * @param pKF   关键帧
+ * @param idx   MapPoint在关键帧的索引
+ **/
 void MapPoint::AddObservation(KeyFrame* pKF, size_t idx)
 {
     unique_lock<mutex> lock(mMutexFeatures);
+    // mObservations: 观测到该MapPoint的KF和该MapPoint在KF中的索引
+    // 如果已经添加过观测，返回
     if(mObservations.count(pKF))
         return;
+    // 记录下能观测到该MapPoint的KF和该MapPoint在KF中的索引
     mObservations[pKF]=idx;
 
+    // 记录被观测到的数目
     if(pKF->mvuRight[idx]>=0)
         nObs+=2;
     else

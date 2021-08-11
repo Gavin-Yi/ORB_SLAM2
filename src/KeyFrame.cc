@@ -43,8 +43,10 @@ KeyFrame::KeyFrame(Frame &F, Map *pMap, KeyFrameDatabase *pKFDB):
     mpORBvocabulary(F.mpORBvocabulary), mbFirstConnection(true), mpParent(NULL), mbNotErase(false),
     mbToBeErased(false), mbBad(false), mHalfBaseline(F.mb/2), mpMap(pMap)
 {
+    // 获取ID自增
     mnId=nNextId++;
 
+    // 根据制定的普通帧，初始化用于加速匹配的网格对象信息，其实就是把每个网格中有的特征点的索引复制过来
     mGrid.resize(mnGridCols);
     for(int i=0; i<mnGridCols;i++)
     {
@@ -53,17 +55,26 @@ KeyFrame::KeyFrame(Frame &F, Map *pMap, KeyFrameDatabase *pKFDB):
             mGrid[i][j] = F.mGrid[i][j];
     }
 
+    // 设置关键帧的位姿
     SetPose(F.mTcw);    
 }
 
+/**
+ * @brief 计算当前帧特征点对应的词袋BoW，主要是mBowVec 和 mFeatvec
+ **/
 void KeyFrame::ComputeBoW()
 {
+    // 判断是否以前已经计算过了，计算过了就跳过
     if(mBowVec.empty() || mFeatVec.empty())
     {
+        // 将描述子 mDescriptors 转换为DBOW要求的输入格式
         vector<cv::Mat> vCurrentDesc = Converter::toDescriptorVector(mDescriptors);
         // Feature vector associate features with nodes in the 4th level (from leaves up)
         // We assume the vocabulary tree has 6 levels, change the 4 otherwise
-        mpORBvocabulary->transform(vCurrentDesc,mBowVec,mFeatVec,4);
+        mpORBvocabulary->transform(vCurrentDesc,    // 当前的描述子vector
+                                    mBowVec,        // 输出，词袋向量，记录的是单词的id及其对应的TF-IDF权重
+                                    mFeatVec,       // 输出，记录node id及其对应的图像 feature对应的索引
+                                    4);             //  从叶节点向前数的层数
     }
 }
 
@@ -630,11 +641,17 @@ cv::Mat KeyFrame::UnprojectStereo(int i)
         return cv::Mat();
 }
 
+/**
+ * @brief 计算场景深度值
+ * 计算当前关键帧下所有地图点的深度进行从小到大排序，返回距离头部其中1/q处的深度之作为当前场景的平均深度，
+ * q=2 即为中值
+ **/
 float KeyFrame::ComputeSceneMedianDepth(const int q)
 {
     vector<MapPoint*> vpMapPoints;
     cv::Mat Tcw_;
     {
+        // 取地图点和位姿，加上块和锁，防止取的时候发生写操作
         unique_lock<mutex> lock(mMutexFeatures);
         unique_lock<mutex> lock2(mMutexPose);
         vpMapPoints = mvpMapPoints;
@@ -643,6 +660,7 @@ float KeyFrame::ComputeSceneMedianDepth(const int q)
 
     vector<float> vDepths;
     vDepths.reserve(N);
+    // 只去了旋转矩阵的第三行，用于计算深度
     cv::Mat Rcw2 = Tcw_.row(2).colRange(0,3);
     Rcw2 = Rcw2.t();
     float zcw = Tcw_.at<float>(2,3);
@@ -652,6 +670,10 @@ float KeyFrame::ComputeSceneMedianDepth(const int q)
         {
             MapPoint* pMP = mvpMapPoints[i];
             cv::Mat x3Dw = pMP->GetWorldPos();
+            //  |--R1--|   |X|   |xcw|
+            //  |--R2--| * |Y| + |ycw|
+            //  |--R3--|   |Z|   |zcw|
+            // 只计算深度信息，所以只需要 R3 * x3Dw + zcw
             float z = Rcw2.dot(x3Dw)+zcw;
             vDepths.push_back(z);
         }

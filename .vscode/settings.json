@@ -13,7 +13,7 @@
 	],
 	"todo-tree.highlights.customHighlight": {
 	" Step ": {
-	"foreground": "#6A5ACD",
+	"foreground": "#4169E1",
 	"icon": "question",
 	"iconColour": "green",
 	"type": "text-and-comment",

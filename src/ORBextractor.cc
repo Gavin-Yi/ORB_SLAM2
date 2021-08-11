@@ -1223,7 +1223,7 @@ void ORBextractor::operator()(
     {
         // 获取在allKeypoints中当前层的特征点的容器的句柄
         vector<KeyPoint>& keypoints = allKeypoints[level];
-        // 本层的特征掉数量
+        // 本层的特征点数量
         int nkeypointsLevel = (int)keypoints.size();
 
         // 如果特征点数量为0，则跳出本层循环，进行下一层的检测

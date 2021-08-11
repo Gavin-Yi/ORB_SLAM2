@@ -38,6 +38,11 @@ class ORBmatcher
 {    
 public:
 
+    /**
+     * @brief Constructor
+     * @param nnratio 最优和次优评分的比例
+     * @param checkOri 是否检查方向
+     **/
     ORBmatcher(float nnratio=0.6, bool checkOri=true);
 
     // Computes the Hamming distance between two ORB descriptors
