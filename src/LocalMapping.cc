@@ -204,6 +204,9 @@ void LocalMapping::MapPointCulling()
     }
 }
 
+/**
+ * @brief 用当前关键帧与相邻关键帧通过三角化产生新的地图点，使得跟踪更稳
+ **/
 void LocalMapping::CreateNewMapPoints()
 {
     // Retrieve neighbor keyframes in covisibility graph

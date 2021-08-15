@@ -270,6 +270,12 @@ float MapPoint::GetFoundRatio()
     return static_cast<float>(mnFound)/mnVisible;
 }
 
+/**
+ * @brief 计算具有代表性的描述子
+ * 
+ * 由于一个MapPoint会被许多相机看到，因此在插入关键帧后，需要判断是否更新当前点的最适合的描述子
+ * 现货的当前点的所有描述子，然后计算描述子之间的两两距离，最好的描述子与其他描述子之间应该具有最小的距离中值
+ **/
 void MapPoint::ComputeDistinctiveDescriptors()
 {
     // Retrieve all observed descriptors
@@ -277,6 +283,7 @@ void MapPoint::ComputeDistinctiveDescriptors()
 
     map<KeyFrame*,size_t> observations;
 
+    // Step 1 获取所有观测，跳过坏点
     {
         unique_lock<mutex> lock1(mMutexFeatures);
         if(mbBad)
@@ -289,44 +296,57 @@ void MapPoint::ComputeDistinctiveDescriptors()
 
     vDescriptors.reserve(observations.size());
 
+    // Step 2 遍历观测到3D点的所有关键帧，获得ORB描述子，并插入到 vDescriptors 中
     for(map<KeyFrame*,size_t>::iterator mit=observations.begin(), mend=observations.end(); mit!=mend; mit++)
     {
+        // mit->first 取观测到该地图点的关键帧
+        // mit->second 取该地图点在关键帧中的索引
         KeyFrame* pKF = mit->first;
 
         if(!pKF->isBad())
-            vDescriptors.push_back(pKF->mDescriptors.row(mit->second));
+            vDescriptors.push_back(pKF->mDescriptors.row(mit->second));     // 取对应描述子向量
     }
 
     if(vDescriptors.empty())
         return;
 
     // Compute distances between them
+    // Step 3 获得这些描述子两两之间的距离
+    // N表示一共有多少个描述子
     const size_t N = vDescriptors.size();
 
+    // Distances 是一个对称矩阵
     float Distances[N][N];
     for(size_t i=0;i<N;i++)
     {
+        // 自己和自己的距离当然是0
         Distances[i][i]=0;
         for(size_t j=i+1;j<N;j++)
         {
+            // 计算两个描述子之间的距离，汉明距离
             int distij = ORBmatcher::DescriptorDistance(vDescriptors[i],vDescriptors[j]);
             Distances[i][j]=distij;
             Distances[j][i]=distij;
         }
     }
 
+    // Step 4 选择最有代表性的描述子，他与其他描述子应该具有最小的距离中值
     // Take the descriptor with least median distance to the rest
     int BestMedian = INT_MAX;
     int BestIdx = 0;
     for(size_t i=0;i<N;i++)
     {
+        // 第i个描述子到其他所有描述子之间的距离
         vector<int> vDists(Distances[i],Distances[i]+N);
         sort(vDists.begin(),vDists.end());
+        // 获得中值
         int median = vDists[0.5*(N-1)];
 
+        // 寻找最小的中值
         if(median<BestMedian)
         {
             BestMedian = median;
+            // 记录最小的描述子
             BestIdx = i;
         }
     }
@@ -358,6 +378,12 @@ bool MapPoint::IsInKeyFrame(KeyFrame *pKF)
     return (mObservations.count(pKF));
 }
 
+/**
+ * @brief 更新平均观测方向和观测距离范围
+ * 
+ * 由于一个MapPoint会被许多相机观测到，因此在插入到关键帧后，需要更新相应变量
+ * 创建新的关键帧时会用到
+ **/
 void MapPoint::UpdateNormalAndDepth()
 {
     map<KeyFrame*,size_t> observations;
@@ -368,14 +394,17 @@ void MapPoint::UpdateNormalAndDepth()
         unique_lock<mutex> lock2(mMutexPos);
         if(mbBad)
             return;
-        observations=mObservations;
-        pRefKF=mpRefKF;
-        Pos = mWorldPos.clone();
+        observations=mObservations;     // 获得观测到该3D点的所有关键帧
+        pRefKF=mpRefKF;                 // 观测到该点的参考关键帧(第一次创建时的关键帧)
+        Pos = mWorldPos.clone();        // 3D点在世界坐标系中的位置
     }
 
     if(observations.empty())
         return;
 
+    // 计算该地图点的法线方向，也就是朝向
+    // 能观测到该地图点的哦呦关键帧，对该点的观测方向归一化为单位向量，然后进行求和得到该地图点的朝向
+    // 初始值为0向量，累加为归一化向量，最后除以总数n
     cv::Mat normal = cv::Mat::zeros(3,1,CV_32F);
     int n=0;
     for(map<KeyFrame*,size_t>::iterator mit=observations.begin(), mend=observations.end(); mit!=mend; mit++)
@@ -387,17 +416,17 @@ void MapPoint::UpdateNormalAndDepth()
         n++;
     }
 
-    cv::Mat PC = Pos - pRefKF->GetCameraCenter();
-    const float dist = cv::norm(PC);
-    const int level = pRefKF->mvKeysUn[observations[pRefKF]].octave;
-    const float levelScaleFactor =  pRefKF->mvScaleFactors[level];
-    const int nLevels = pRefKF->mnScaleLevels;
+    cv::Mat PC = Pos - pRefKF->GetCameraCenter();                       // 参考关键帧相机指向3D点的向量(世界坐标系下的表示)
+    const float dist = cv::norm(PC);                                    // 该点到参考关键帧相机的距离,向量的2-范数
+    const int level = pRefKF->mvKeysUn[observations[pRefKF]].octave;    // 观测到该地图点的当前帧的特征点在金字塔的第几层
+    const float levelScaleFactor =  pRefKF->mvScaleFactors[level];      // 当前金字塔所对应的缩放倍数
+    const int nLevels = pRefKF->mnScaleLevels;                          // 金字塔层数
 
     {
         unique_lock<mutex> lock3(mMutexPos);
-        mfMaxDistance = dist*levelScaleFactor;
-        mfMinDistance = mfMaxDistance/pRefKF->mvScaleFactors[nLevels-1];
-        mNormalVector = normal/n;
+        mfMaxDistance = dist*levelScaleFactor;                              // 观测到该点的距离上限
+        mfMinDistance = mfMaxDistance/pRefKF->mvScaleFactors[nLevels-1];    // 观测到该点的距离下限
+        mNormalVector = normal/n;                                           // 获得平均的观测方向
     }
 }
 
@@ -413,6 +442,21 @@ float MapPoint::GetMaxDistanceInvariance()
     return 1.2f*mfMaxDistance;
 }
 
+// 下图中横线的大小表示不同图层图像上的一个像素表示的真实物理空间中的大小
+//              ____
+// Nearer      /____\         level: n-1 --> dmin
+//            /______\                              d/dmin = 1.2^(n-1-m)
+//           /________\       level: m   --> d
+//          /__________\                            dmax/d = 1.2^m
+// Father  /____________\     level: 0   --> dmax
+//
+//           log(dmax/d)
+// m = ceil(-------------)
+//             log(1.2)
+// 这个函数的作用：
+// 在进行投影匹配的时候会给定特征点的搜索范围，考虑到处于不同尺度(也就是距离相机远近，位于图像金字塔中不同图层)的特征点受到相机旋转的影响
+// 因此会希望距离相机近的点的搜索范围更大一点，距离相机更远的点的搜索范围更小一点，所以要在这里，根据点到关键帧/帧的距离来估计它在当前关键帧中
+// 会大概处于哪个尺度
 int MapPoint::PredictScale(const float &currentDist, KeyFrame* pKF)
 {
     float ratio;

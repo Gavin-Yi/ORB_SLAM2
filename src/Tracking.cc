@@ -917,19 +917,35 @@ bool Tracking::TrackReferenceKeyFrame()
     return nmatchesMap>=10;
 }
 
+/**
+ * @brief 更新上一帧位姿，在上一帧中生成临时地图点
+ * 单目情况：只计算了上一帧的世界坐标系位姿
+ * 双目和RGBD情况：选取有深度值的并且没有被选为地图点的点生成新的临时地图点，提高跟踪鲁棒性
+ **/
 void Tracking::UpdateLastFrame()
 {
     // Update pose according to reference keyframe
+    // Step 1 利用参考关键帧更新上一帧在世界坐标系下的位姿
+    // 上一普通阵的参考关键帧，注意这里用的是参考关键帧（位姿准）而不是上上一帧的普通帧
     KeyFrame* pRef = mLastFrame.mpReferenceKF;
+    // ref_keyframe 到 lastframe 的位姿变换
     cv::Mat Tlr = mlRelativeFramePoses.back();
 
+    // 将上一帧的世界坐标系的位姿计算出来
+    // l:last, r:reference, w:world
+    // Tlw = Tlr * Trw
     mLastFrame.SetPose(Tlr*pRef->GetPose());
 
+    // 如果上一帧为关键帧，或者单目的情况，运行到这就可以退出了
     if(mnLastKeyFrameId==mLastFrame.mnId || mSensor==System::MONOCULAR || !mbOnlyTracking)
         return;
 
+    // Step 2 对于双目或RGBD相机，为上一帧生成新的临时地图点
+    // Notice: 这些地图点只用于跟踪，不加入到地图，在跟踪完后会被删除
+
     // Create "visual odometry" MapPoints
     // We sort points according to their measured depth by the stereo/RGB-D sensor
+    // Step 2.1 得到上一帧中具有有效深度值的特征点（不一定是地图点）
     vector<pair<float,int> > vDepthIdx;
     vDepthIdx.reserve(mLastFrame.N);
     for(int i=0; i<mLastFrame.N;i++)
@@ -937,13 +953,16 @@ void Tracking::UpdateLastFrame()
         float z = mLastFrame.mvDepth[i];
         if(z>0)
         {
+            // vDepthIdx第一个元素是某个点的深度，第二个元素是对应的特征点id
             vDepthIdx.push_back(make_pair(z,i));
         }
     }
 
+    // 如果上一帧没有有效深度，则直接退出
     if(vDepthIdx.empty())
         return;
 
+    // 按照深度从小到大排序
     sort(vDepthIdx.begin(),vDepthIdx.end());
 
     // We insert all close points (depth<mThDepth)
@@ -1092,40 +1111,61 @@ bool Tracking::TrackLocalMap()
         return true;
 }
 
-
+/**
+ * @brief 判断当前帧是否需要插入关键帧
+ * 
+ * Step 1:纯VO模式下不插入关键帧，如果局部地图被闭环检测使用，则不插入关键帧
+ * Step 2:如果距离上一次重定位比较近，或者关键帧数目超出最大限制，不插入关键帧
+ * Step 3:得到参考关键帧跟踪到的地图点数量
+ * Step 4:查询局部地图管理器是否繁忙，也就是当前能否接受新的关键帧
+ * Step 5:对于双目或RGBD相机，统计可以添加的有效地图点总数 和 跟踪到的地图点数量
+ * Step 6:决策是否需要插入关键帧
+ **/
 bool Tracking::NeedNewKeyFrame()
 {
+    // Step 1：纯VO模式下不插入关键帧
     if(mbOnlyTracking)
         return false;
 
     // If Local Mapping is freezed by a Loop Closure do not insert keyframes
+    // Step 2:如果局部地图被闭环检测使用，则不插入关键帧
     if(mpLocalMapper->isStopped() || mpLocalMapper->stopRequested())
         return false;
 
     const int nKFs = mpMap->KeyFramesInMap();
 
     // Do not insert keyframes if not enough frames have passed from last relocalisation
+    // Step 3:如果距离上一次重定位比较近，或者关键帧数目超出最大限制，不插入关键帧
     if(mCurrentFrame.mnId<mnLastRelocFrameId+mMaxFrames && nKFs>mMaxFrames)
         return false;
 
     // Tracked MapPoints in the reference keyframe
+    // Step 4:得到参考关键帧跟踪到的地图点数量
+    // UpdateLocalKeyFrame 函数中会将与当前关键帧共视程度最高的关键帧设定为当前帧的参考关键帧
+
+    // 地图点的最小观测数目
     int nMinObs = 3;
     if(nKFs<=2)
         nMinObs=2;
+    // 参考关键帧地图点中观测的数目 >= nMinObs的地图点数目
     int nRefMatches = mpReferenceKF->TrackedMapPoints(nMinObs);
 
     // Local Mapping accept keyframes?
+    // Step 5:查询局部地图管理器是否繁忙，也就是当前能否接受新的关键帧
     bool bLocalMappingIdle = mpLocalMapper->AcceptKeyFrames();
 
     // Check how many "close" points are being tracked and how many could be potentially created.
+    // Step 6:对于双目或RGBD相机，统计可以添加的有效地图点总数 和 跟踪到的地图点数量
     int nNonTrackedClose = 0;
     int nTrackedClose= 0;
     if(mSensor!=System::MONOCULAR)
     {
         for(int i =0; i<mCurrentFrame.N; i++)
         {
+            // 深度值在有效范围内
             if(mCurrentFrame.mvDepth[i]>0 && mCurrentFrame.mvDepth[i]<mThDepth)
             {
+                // 是否右对应地图点
                 if(mCurrentFrame.mvpMapPoints[i] && !mCurrentFrame.mvbOutlier[i])
                     nTrackedClose++;
                 else
@@ -1134,44 +1174,65 @@ bool Tracking::NeedNewKeyFrame()
         }
     }
 
+    // 双目或RGBD情况下，跟踪到的地图点太少 同时 没有跟踪到的三维点太多，可以插入关键帧
+    // 单目判断结果就是Flase
     bool bNeedToInsertClose = (nTrackedClose<100) && (nNonTrackedClose>70);
 
+    // Step 7:决策是否需要插入关键帧
     // Thresholds
+    // Step 7.1: 设定比例阈值，当前帧和参考关键帧跟踪到点的比例，比例越大，越倾向于增加关键帧
     float thRefRatio = 0.75f;
+    
+    // 关键帧只有一帧，插入关键帧的阈值低一些
     if(nKFs<2)
         thRefRatio = 0.4f;
 
+    // 单目情况下插入关键帧的频率很高
     if(mSensor==System::MONOCULAR)
         thRefRatio = 0.9f;
 
     // Condition 1a: More than "MaxFrames" have passed from last keyframe insertion
+    // Step 7.2: 很长时间没有插入关键帧，可以插入
     const bool c1a = mCurrentFrame.mnId>=mnLastKeyFrameId+mMaxFrames;
+
     // Condition 1b: More than "MinFrames" have passed and Local Mapping is idle
+    // Step 7.3: 满足插入关键帧的最小间隔并且LocalMapper处于空闲状态，可以插入
     const bool c1b = (mCurrentFrame.mnId>=mnLastKeyFrameId+mMinFrames && bLocalMappingIdle);
+
     //Condition 1c: tracking is weak
+    // Step 7.4: 在双目，RGBD情况下，当前帧跟踪到的点比参考关键帧的0.25倍还少，或者满足 bNeedToInsertClose
     const bool c1c =  mSensor!=System::MONOCULAR && (mnMatchesInliers<nRefMatches*0.25 || bNeedToInsertClose) ;
+
     // Condition 2: Few tracked points compared to reference keyframe. Lots of visual odometry compared to map matches.
-    const bool c2 = ((mnMatchesInliers<nRefMatches*thRefRatio|| bNeedToInsertClose) && mnMatchesInliers>15);
+    // Step 7.5: 和参考帧相比当前跟踪到的点太少，或者满足 bNeedToInsertClose；同时跟踪到的内点还不能太少
+    const bool c2 = ((mnMatchesInliers<nRefMatches*thRefRatio || bNeedToInsertClose) && mnMatchesInliers>15);
 
     if((c1a||c1b||c1c)&&c2)
     {
         // If the mapping accepts keyframes, insert keyframe.
         // Otherwise send a signal to interrupt BA
+        // Step 7.6 Local Mapping 空闲时可以直接插入，不空闲需要根据情况插入
         if(bLocalMappingIdle)
         {
             return true;
         }
         else
         {
+            // 发出信号打断BA
             mpLocalMapper->InterruptBA();
             if(mSensor!=System::MONOCULAR)
             {
+                // 队列里不能阻塞太多的关键帧
+                // Tracking 插入关键帧不是直接插入，而且先插入到mlNewKeyFrames中
+                // 然后LocalMapper再逐个pop出来，插入到mspKeyFrames
                 if(mpLocalMapper->KeyframesInQueue()<3)
+                    // 队列中的关键帧数目不多，可以插入
                     return true;
                 else
                     return false;
             }
             else
+                // ?单目情况下直接不允许插入
                 return false;
         }
     }
@@ -1179,23 +1240,39 @@ bool Tracking::NeedNewKeyFrame()
         return false;
 }
 
+/**
+ * @brief 创建关键帧
+ * 对于非单目情况，同时创建新的MapPoints
+ * 
+ * Step 1 将当前帧构造成关键帧
+ * Step 2 将当前关键帧设置为当前帧的参考关键帧
+ * Step 3 对于双目或RGBD相机，为当前帧生成新的MapPoints
+ **/
 void Tracking::CreateNewKeyFrame()
 {
+    // 如果局部建图线程关闭，就无法插入关键帧
     if(!mpLocalMapper->SetNotStop(true))
         return;
 
+    // Step 1 将当前帧构造成关键帧
     KeyFrame* pKF = new KeyFrame(mCurrentFrame,mpMap,mpKeyFrameDB);
 
+    // Step 2 将当前关键帧设置为当前帧的参考关键帧
+    // 在UpdateLocalKeyFrame函数中会将与当前关键帧共视程度最高的关键帧设定为当前帧的参考关键帧
     mpReferenceKF = pKF;
     mCurrentFrame.mpReferenceKF = pKF;
 
+    // 这段代码和 Tracking::UpdateLastFrame 中的第一部分代码功能相同
+    // Step 3 对于双目或RGBD摄像机，为当前帧生成新的地图点，单目无操作
     if(mSensor!=System::MONOCULAR)
     {
+        // 根据Tcw计算mRcw mtcw和mRwc mtwc
         mCurrentFrame.UpdatePoseMatrices();
 
         // We sort points by the measured depth by the stereo/RGBD sensor.
         // We create all those MapPoints whose depth < mThDepth.
         // If there are less than 100 close points we create the 100 closest.
+        // Step 3.1 得到当前帧有深度值的特征点(不一定是地图点)
         vector<pair<float,int> > vDepthIdx;
         vDepthIdx.reserve(mCurrentFrame.N);
         for(int i=0; i<mCurrentFrame.N; i++)
@@ -1203,14 +1280,17 @@ void Tracking::CreateNewKeyFrame()
             float z = mCurrentFrame.mvDepth[i];
             if(z>0)
             {
+                // 第一个元素是深度，第二个元素是ID
                 vDepthIdx.push_back(make_pair(z,i));
             }
         }
 
         if(!vDepthIdx.empty())
         {
+            // Step 3.2 按照深度从小到大排列
             sort(vDepthIdx.begin(),vDepthIdx.end());
 
+            // Step 3.3 从中找到不是地图点的生成临时地图点
             int nPoints = 0;
             for(size_t j=0; j<vDepthIdx.size();j++)
             {
@@ -1218,6 +1298,7 @@ void Tracking::CreateNewKeyFrame()
 
                 bool bCreateNew = false;
 
+                // 如果这个点对应在上一帧的地图点中没有，或者创建后没有被观测到，那么就生成一个临时地图点
                 MapPoint* pMP = mCurrentFrame.mvpMapPoints[i];
                 if(!pMP)
                     bCreateNew = true;
@@ -1227,10 +1308,12 @@ void Tracking::CreateNewKeyFrame()
                     mCurrentFrame.mvpMapPoints[i] = static_cast<MapPoint*>(NULL);
                 }
 
+                // 如果需要新建地图点，这里的地图点不是临时的，是全局地图中新建地图点，用于跟踪
                 if(bCreateNew)
                 {
                     cv::Mat x3D = mCurrentFrame.UnprojectStereo(i);
                     MapPoint* pNewMP = new MapPoint(x3D,pKF,mpMap);
+                    // 这些添加属性的操作是每次创建MapPoint后都要做的
                     pNewMP->AddObservation(pKF,i);
                     pKF->AddMapPoint(pNewMP,i);
                     pNewMP->ComputeDistinctiveDescriptors();
@@ -1245,16 +1328,22 @@ void Tracking::CreateNewKeyFrame()
                     nPoints++;
                 }
 
+                // Step 3.4 停止新建地图点必须同时满足以下条件
+                // a. 当前点的深度已经超过了设定的阈值
+                // b. 已经遍历超过100个点了，说明距离比较远了(深度从小到达排序)
                 if(vDepthIdx[j].first>mThDepth && nPoints>100)
                     break;
             }
         }
     }
 
+    // Step 4 插入关键帧
+    // 关键帧插入到列表 mlNewKeyFrames 中，等待Local Mapping线程使用
     mpLocalMapper->InsertKeyFrame(pKF);
 
+    // 插入好了，允许局部建图停止
     mpLocalMapper->SetNotStop(false);
-
+    // 当前帧成为新的关键帧，更新
     mnLastKeyFrameId = mCurrentFrame.mnId;
     mpLastKeyFrame = pKF;
 }

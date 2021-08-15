@@ -33,14 +33,17 @@ BowVector::~BowVector(void)
 
 void BowVector::addWeight(WordId id, WordValue v)
 {
+  // 返回指向大于等于id 的第一个值的位置
   BowVector::iterator vit = this->lower_bound(id);
   
   if(vit != this->end() && !(this->key_comp()(id, vit->first)))
   {
+    // 如果id == vit -> first，说明是同一个Word，更新权重
     vit->second += v;
   }
   else
   {
+    // 如果该Word id 不再BowVector，新添加进来
     this->insert(vit, BowVector::value_type(id, v));
   }
 }

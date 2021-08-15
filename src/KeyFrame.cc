@@ -258,6 +258,7 @@ set<MapPoint*> KeyFrame::GetMapPoints()
     return s;
 }
 
+// 关键帧中，大于等于最少观测数目 minObs的MapPoints的数量，这些特征点被认为跟踪到了
 int KeyFrame::TrackedMapPoints(const int &minObs)
 {
     unique_lock<mutex> lock(mMutexFeatures);
@@ -445,24 +446,38 @@ void KeyFrame::SetNotErase()
     mbNotErase = true;
 }
 
+/**
+ * @brief 删除当前这个关键帧，表示不进行回环检测过程；由回环检测线程调用
+ **/
 void KeyFrame::SetErase()
 {
     {
         unique_lock<mutex> lock(mMutexConnections);
+        // 如果当前帧和其他的关键帧没有形成回环关系，那么就删除
         if(mspLoopEdges.empty())
         {
             mbNotErase = false;
         }
     }
 
+    // mbToBeErased：删除之前记录的想要删但时机不合适没有删除的帧
     if(mbToBeErased)
     {
         SetBadFlag();
     }
 }
 
+/**
+ * @brief 真正地执行删除关键帧的操作
+ * 需要删除的是该关键帧和其他所有帧、地图点之间的连接关系
+ * 
+ * mbNotErase作用：表示要删除该关键帧及其连接关系但是这个关键帧有可能正在回环检测或者计算sim3操作，这时候虽然这个关键帧冗余，但是却不能删除
+ * 仅设置mbNotErase 为 True，这时候调用setBadFlag 函数时，不会将这个关键帧删除，只会把 mbToBeErased变为True，代表这个关键帧可以删除但不到
+ * 时候，先记下来以后在闭环线程里调用 SetErase 会根据 mbToBeErased 来删除之前可以删除但还没有删除的关键帧
+ **/
 void KeyFrame::SetBadFlag()
 {   
+    // Step 1 首先处理一下删除不了的情况
     {
         unique_lock<mutex> lock(mMutexConnections);
         if(mnId==0)
@@ -618,6 +633,7 @@ vector<size_t> KeyFrame::GetFeaturesInArea(const float &x, const float &y, const
     return vIndices;
 }
 
+// 判断某个点是否在当前关键帧图像中
 bool KeyFrame::IsInImage(const float &x, const float &y) const
 {
     return (x>=mnMinX && x<mnMaxX && y>=mnMinY && y<mnMaxY);

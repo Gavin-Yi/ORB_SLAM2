@@ -13,7 +13,7 @@
 	],
 	"todo-tree.highlights.customHighlight": {
 	" Step ": {
-	"foreground": "#4169E1",
+	"foreground": "#FFD700",
 	"icon": "question",
 	"iconColour": "green",
 	"type": "text-and-comment",
@@ -104,5 +104,6 @@
 		"xutility": "cpp",
 		"*.tcc": "cpp",
 		"*.txx": "cpp"
-	}
+	},
+	"C_Cpp.errorSquiggles": "Disabled"
 }

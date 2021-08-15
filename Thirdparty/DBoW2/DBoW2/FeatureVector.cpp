@@ -31,13 +31,14 @@ FeatureVector::~FeatureVector(void)
 void FeatureVector::addFeature(NodeId id, unsigned int i_feature)
 {
   FeatureVector::iterator vit = this->lower_bound(id);
-  
+  // 将同样 node id下的特征放在一个vector里
   if(vit != this->end() && vit->first == id)
   {
     vit->second.push_back(i_feature);
   }
   else
   {
+    // 如果当前FeatureVector里没有这个id，新建id再存储
     vit = this->insert(vit, FeatureVector::value_type(id, 
       std::vector<unsigned int>() ));
     vit->second.push_back(i_feature);
