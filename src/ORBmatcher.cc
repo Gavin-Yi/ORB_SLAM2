@@ -509,13 +509,13 @@ int ORBmatcher::SearchForInitialization(Frame &F1, Frame &F2, vector<cv::Point2f
             // 最佳距离比次佳距离要小于设定的比例，这样特征点的辨识度更高
             if(bestDist<(float)bestDist2*mfNNratio)
             {
-                // 如果找到的候选特征点对应F1中特征点已经匹配过了，说明发生了重复匹配，将原来的匹配删掉
+                // 如果找到的候选特征点对应F1中特征点已经匹配过了，说明发生了重复匹配，将原来的匹配删掉，更新匹配
                 if(vnMatches21[bestIdx2]>=0)
                 {
                     vnMatches12[vnMatches21[bestIdx2]]=-1;
                     nmatches--;
                 }
-                // 次优的匹配关系，双向建立
+                // 最优的匹配关系，双向建立
                 vnMatches12[i1]=bestIdx2;
                 vnMatches21[bestIdx2]=i1;
                 vMatchedDistance[bestIdx2]=bestDist;

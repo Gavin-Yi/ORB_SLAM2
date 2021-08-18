@@ -699,7 +699,7 @@ vector<cv::KeyPoint> ORBextractor::DistributeOctTree(   // 返回值是一个保
                 if(n1.vKeys.size()>0)
                 {
                     lNodes.push_front(n1);  
-                    // 在根节点分为4个字节点的时候，就已经对大小为1的情况进行了处理，设置NoMore=1                  
+                    // 在根节点分为4个子节点的时候，就已经对大小为1的情况进行了处理，设置NoMore=1                  
                     if(n1.vKeys.size()>1)
                     {
                         // 可以被分裂的子节点数量+1

@@ -226,6 +226,7 @@ Frame::Frame(
         return;
 
     // Step 4 用OpenCV的矫正函数，内参进行去畸变
+    // 关键点从 mvKeys 到 mvKeysUn
     UndistortKeyPoints();
 
     // Set no stereo information
@@ -245,7 +246,7 @@ Frame::Frame(
         // 计算去畸变图像的边界
         ComputeImageBounds(imGray);
 
-        // 网格默认是64*48
+        // 一个图像默认是 48(行) * 64(列) 个网格
         // 表示一个图像像素相当于多少个图像网格列
         mfGridElementWidthInv=static_cast<float>(FRAME_GRID_COLS)/static_cast<float>(mnMaxX-mnMinX);
         // 表示一个图像像素相当于多少个图像网格行
@@ -391,11 +392,11 @@ bool Frame::isInFrustum(MapPoint *pMP, float viewingCosLimit)
 }
 
 /**
- * @brief 找到在以 x,y 为中心，半径为r的圆形内且金字塔层级在[minLevel, maxLevel]的特征点
+ * @brief 找到在以 x,y 为中心，半径为r的矩形内且金字塔层级在[minLevel, maxLevel]的特征点
  * 
  * @param [in] x            特征点x坐标
  * @param [in] y            特征点y坐标
- * @param [in] r            圆形搜索半径
+ * @param [in] r            矩形搜索半径
  * @param [in] minLevel     最小金字塔层级
  * @param [in] maxLevel     最大金字塔层级
  * @return                  返回搜索到的候选匹配点ID
@@ -406,7 +407,7 @@ vector<size_t> Frame::GetFeaturesInArea(const float &x, const float  &y, const f
     vector<size_t> vIndices;
     vIndices.reserve(N);
 
-    // Step 1 计算半径为r的圆左右上下边界所在的 网格 列和行的ID
+    // Step 1 计算半径为r的矩形左右上下边界所在的 网格 列和行的ID
     // mfGridElementWidthInv = (mfGridElementWidthInv) / (mnMaxX - mnMinX) ，表示一个元素占多少个网格(肯定小于1)
     // (x-mnMinX-r)计算的圆最左侧的点的像素坐标，乘上 mfGridElementWidthInv,表示圆最左侧所在的网格的列ID
     const int nMinCellX = max(0,(int)floor((x-mnMinX-r)*mfGridElementWidthInv));
@@ -430,7 +431,7 @@ vector<size_t> Frame::GetFeaturesInArea(const float &x, const float  &y, const f
     // ?疑似bug，后面的 maxLevel>=0 肯定True
     const bool bCheckLevels = (minLevel>0) || (maxLevel>=0);
 
-    // Step 2 遍历圆形区域内的所有网格，寻找满足条件的候选特征点，并将其index放到输出里
+    // Step 2 遍历矩形区域内的所有网格，寻找满足条件的候选特征点，并将其index放到输出里
     for(int ix = nMinCellX; ix<=nMaxCellX; ix++)
     {
         for(int iy = nMinCellY; iy<=nMaxCellY; iy++)

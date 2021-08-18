@@ -302,7 +302,7 @@ cv::Mat Tracking::GrabImageMonocular(
  **/
 void Tracking::Track()
 {
-    // tarck包含两部分：估计运动、跟踪局部地图
+    // track包含两部分：估计运动、跟踪局部地图
 
     // mState为tracking的状态，包括 SYSTEM_NOT_READY，NO_IMAGES_YET，NOT_INITIALIZED，OK，LOST
     // 如果图像复位过，或者第一次运行，则为 NO_IMAGES_YET
